@@ -2,11 +2,18 @@ const RECEIPT_SCREEN_CLASS = 'pos-receipt'
 const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
 
+const PAYMENT_MAP = {
+    Cash: 'P',
+    Card: 'N'
+}
+
 function extractMoney(text) {
     return (text??'').match(/((([1-9]\d{0,2}(,\d{3})*)|0)?\.\d{2})\s+MK/i)?.[1] ?? -1
 }
 
 function injectDownloadOption(params) {
+    // if it's there, don't add it again
+    if (document.getElementById(FISCALPY_PRINT_UI_ID)) return
     const htmlDownload = `
         <div id="${FISCALPY_PRINT_UI_ID}" class='d-flex gap-1'>
             <button
@@ -16,8 +23,7 @@ function injectDownloadOption(params) {
                 style='color: white; background-color: #115027;'>
                 Print Fiscal Receipt (MRA)
             </button>
-        </div>
-    `;
+        </div>`;
     const receiptSpaceNode = document.getElementsByClassName('receipt-options')[0];
     receiptSpaceNode.insertAdjacentHTML('afterbegin', htmlDownload);
     setTimeout(() => {
@@ -34,7 +40,7 @@ function parseReceipt(node) {
     const receiptObj = {
         "order_number": (() => {
             const text = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
-            return text.match(/Order\s+(\d{5}-\d{3}-\d{4})/i)?.[1] ?? "N/A"
+            return text.match(/Order\s+(\d{5}-\d{3}-\d{4})/i)?.[1]
         })(),
         "user": (() => {
             const text = node.querySelector('.cashier')?.innerText ?? ''
@@ -62,7 +68,7 @@ function parseReceipt(node) {
             const paymentNodes = node.querySelectorAll('.paymentlines')??[]
             for (let i = 0; i < paymentNodes.length; ++i) {
                 const [paymentMethod, amountPaid] = `${paymentNodes[i].innerText??''}`.split('\n')
-                payments[paymentMethod] = extractMoney(amountPaid)
+                payments[PAYMENT_MAP[paymentMethod]] = extractMoney(amountPaid)
             }
             return payments
         })(),
@@ -84,9 +90,8 @@ const observer = new MutationObserver((mutationsList) => {
                     injectDownloadOption({
                         onPrint: () => {
                             console.log(receipt)
-                            chrome.runtime.sendMessage({
-                                action: "print-receipt", receipt
-                            })
+                            alert("Receipt object generated")
+                            chrome.runtime.sendMessage({ action: "print-receipt", receipt })
                         }
                     })
                 }
