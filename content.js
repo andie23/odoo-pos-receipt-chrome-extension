@@ -3,12 +3,18 @@ const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
 const LOCAL_STORAGE_PAYMENT_FISCALPY = 'com.fiscalpy.odoo.extension.payment_types'
 const LOCAL_STORAGE_CAN_PRINT_ONLOAD = 'com.fiscalpy.odoo.extension.can_print_onload'
+const LOCAL_STORAGE_PRINTED_ORDER_NUMBERS = 'com.fiscalpy.odoo.extension.printed_order_numbers'
 
+/**
+ * Listen for messages from the background script
+ */
 chrome.runtime.onMessage.addListener((message) => {
     if (message.origin.action === 'print-receipt') {
+        // Print went through successfully
         if (message.ok) {
-            alert('Receipt has been sent to Fiscal printer')
+            updateOrderNumber(message.origin.receipt.order_number)
         }
+        // Print failed
         if (message.error) {
             alert(message.error)
         }
@@ -40,6 +46,7 @@ function injectDownloadOption(params) {
     }, 500)
 }
 
+// Parse the receipt screen and extract the necessary data
 function parseReceipt(node) {
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
     // We need to track the following aggregates for validation purposes..
@@ -138,6 +145,17 @@ function parseReceipt(node) {
     }
 }
 
+function isOrderNumberPrinted(orderNumber) {
+    const orderNumbers = JSON.parse(localStorage.getItem(LOCAL_STORAGE_PRINTED_ORDER_NUMBERS) ?? '[]')
+    return orderNumbers && orderNumbers.includes(orderNumber)
+}
+
+function updateOrderNumber(orderNumber) {
+    const orderNumbers = JSON.parse(localStorage.getItem(LOCAL_STORAGE_PRINTED_ORDER_NUMBERS) ?? '[]')
+    orderNumbers.push(orderNumber)
+    localStorage.setItem(LOCAL_STORAGE_PRINTED_ORDER_NUMBERS, JSON.stringify(orderNumbers))
+}
+
 function getPaymentModes() {
     let paymentTypes = localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY)
     if (!paymentTypes) {
@@ -149,10 +167,14 @@ function getPaymentModes() {
 function init(node) {
     const receipt = parseReceipt(node)
     console.log(receipt)
-    const sendPrintMessage = () => chrome.runtime.sendMessage({
-        receipt: receipt.receiptData,
-        action: "print-receipt"
-    })
+    const sendPrintMessage = () => {
+        if (isOrderNumberPrinted(receipt.receiptData.order_number)) {
+            if (!confirm(`Order number ${receipt.receiptData.order_number} was already processed. YOU MAY INCUR DOUBLE TAXATION IF YOU PRINT AGAIN...`)) {
+                return
+            }
+        }
+        chrome.runtime.sendMessage({ receipt: receipt.receiptData, action: "print-receipt" })
+    }
     if (receipt.errors.length > 0) {
         return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
     }
@@ -164,12 +186,16 @@ function init(node) {
     })
 }
 
+/*
+* Entry point
+*/
 window.addEventListener('load', () => {
     const container = document.getElementsByClassName(RECEIPT_SCREEN_CLASS)[0]
     if (container) init(container)
-    // Start observing the entire document or a specific container
+    // Observe for new receipt screens
     const observer = new MutationObserver((mutationsList) => {
         for (const mutation of mutationsList) {
+            // A new receipt screen has been added
             if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach((node) => {
                     if (node.nodeType === 1 && node.classList.contains(RECEIPT_SCREEN_CLASS)) {
@@ -179,6 +205,7 @@ window.addEventListener('load', () => {
             }
         }
     });
+    // Start observing the target node for configured mutations
     observer.observe(document.body, {
         childList: true, // Observe direct children
         attributes: true, // Observe attribute changes (like class)
