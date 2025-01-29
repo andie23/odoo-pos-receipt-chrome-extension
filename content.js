@@ -11,13 +11,10 @@ const LOCAL_STORAGE_PRINTED_ORDER_NUMBERS = 'com.fiscalpy.odoo.extension.printed
 chrome.runtime.onMessage.addListener((message) => {
     if (message.origin.action === 'print-receipt') {
         // Print went through successfully
-        if (message.ok) {
-            updateOrderNumber(message.origin.receipt.order_number)
-        }
+        if (message.ok) updateOrderNumber(message.origin.receipt.order_number)
+
         // Print failed
-        if (message.error) {
-            alert(message.error)
-        }
+        if (message.error) alert(message.error)
     }
 })
 
@@ -131,12 +128,24 @@ function parseReceipt(node) {
             }, {})
         })()
     }
-    const validations = {
-        "Tax Code Missing": aggregates.without_tax_code > 0,
-        "Invalid Sub Total": parseInt(aggregates.sub_total) !== parseInt(aggregates.calculated_sub_total_by_product),
-        "Invalid Total Quantity": aggregates.total_quantity !== aggregates.calculated_total_quantity,
-        "Payment Mismatch": parseInt(aggregates.calculated_sub_total_by_payment_modes) < parseInt(aggregates.sub_total),
-        "Invalid Total Products": parseInt(aggregates.total_products) !== parseInt(aggregates.calculated_total_products)
+    let validations = {}
+    try {
+        validations = {
+            "Missing products": receiptObj.products.length === 0,
+            "Missing total quantity": aggregates.total_quantity === 0,
+            "Missing Order Number": !receiptObj.order_number,
+            "Missing sub total": aggregates.sub_total === '0.0' || !aggregates.sub_total || isNaN(aggregates.sub_total) || aggregates.sub_total === 0,
+            "Tax Code Missing": aggregates.without_tax_code > 0,
+            "Invalid Sub Total": parseInt(aggregates.sub_total) !== parseInt(aggregates.calculated_sub_total_by_product),
+            "Invalid Total Quantity": aggregates.total_quantity !== aggregates.calculated_total_quantity,
+            "Payment Mismatch": parseInt(aggregates.calculated_sub_total_by_payment_modes) < parseInt(aggregates.sub_total),
+            "Invalid Total Products": parseInt(aggregates.total_products) !== parseInt(aggregates.calculated_total_products)
+        }
+    } catch (e) {
+        validations = {
+            "Receipt validation has crashed!": true
+        }
+        console.error(e)
     }
     return {
         receiptData: receiptObj,
