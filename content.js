@@ -1,15 +1,18 @@
 const RECEIPT_SCREEN_CLASS = 'pos-receipt'
 const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
+const LOCAL_STORAGE_PAYMENT_FISCALPY = 'com.fiscalpy.odoo.extension.payment_types'
 
-const PAYMENT_MAP = {
-    Cash: 'P',
-    Card: 'N'
-}
-
-function extractMoney(text) {
-    return (text??'').match(/((([1-9]\d{0,2}(,\d{3})*)|0)?\.\d{2})\s+MK/i)?.[1] ?? -1
-}
+chrome.runtime.onMessage.addListener((message) => {
+    if (message.origin.action === 'print-receipt') {
+        if (message.ok) {
+            alert('Receipt has been sent to Fiscal printer')
+        }
+        if (message.error) {
+            alert(message.error)
+        }
+    }
+})
 
 function injectDownloadOption(params) {
     // if it's there, don't add it again
@@ -24,7 +27,7 @@ function injectDownloadOption(params) {
                 Print Fiscal Receipt (MRA)
             </button>
         </div>`;
-    const receiptSpaceNode = document.getElementsByClassName('receipt-options')[0];
+    const receiptSpaceNode = document.getElementsByClassName('buttons')[0];
     receiptSpaceNode.insertAdjacentHTML('afterbegin', htmlDownload);
     setTimeout(() => {
         document.getElementById(FISCALPY_PRINT_BTN_ID).removeAttribute('disabled');
@@ -37,72 +40,141 @@ function injectDownloadOption(params) {
 }
 
 function parseReceipt(node) {
+    const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
+    // We need to track the following aggregates for validation purposes..
+    const aggregates = {
+        "sub_total": parseFloat(
+            (receiptText.match(/Sub\s+Total\s+((([1-9]\d{0,2}(,\d{3})*)|0)?\.\d{2})/i)?.[1] ?? '0.0')
+            .replace(',','')
+        ).toFixed(2),
+        "total_quantity": parseInt(
+            receiptText.match(/Total\s+Product\s+Qty\s+(\d+)/i)?.[1] ?? '0'
+        ),
+        "total_products": parseInt(
+            receiptText.match(/Total\s+No.\s+of\s+Products\s+(\d+)/i)?.[1] ?? '0'
+        ),
+        "without_tax_code": 0,
+        "calculated_total_quantity": 0,
+        "calculated_sub_total_by_product": 0,
+        "calculated_sub_total_by_payment_modes": 0,
+        "calculated_total_products": 0
+    }
+    // Final receipt object that will be printed
     const receiptObj = {
-        "order_number": (() => {
-            const text = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
-            return text.match(/Order\s+(\d{5}-\d{3}-\d{4})/i)?.[1]
-        })(),
-        "user": (() => {
-            const text = node.querySelector('.cashier')?.innerText ?? ''
-            return text.match(/Served\s+by\s+(\w+)/i)?.[1] ?? 'N/A'
+        ...(() => {
+            const text = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
+            return {
+                "user": text.match(/Served\s+by\s+(\w+\s*(?:\w+))/i)?.[1] ?? 'N/A',
+                "order_number": text.match(/order (\d{5}-\d{3}-\d{4})/i)?.[1] ?? 'N/A',
+            }
         })(),
         "products": (() => {
             const orders = []
-            const orderNodes = node.querySelectorAll('.orderline')
-            for (let i=0; i < orderNodes.length; ++i) {
-                const oNode = orderNodes[i]
-                const product = {
-                    "tax_code": "E",
-                    "name": oNode.querySelector('.product-name')?.innerText ?? '',
-                    "quantity": parseInt(`${oNode.querySelector('.qty')?.innerText??'-1'}`),
-                    "price": extractMoney(
-                        oNode.querySelector('.price-per-unit')?.innerText
-                    )
+            let taxCode = ''
+            let productName = ''
+            let productPrice = 0
+            let productQuantity = 0
+            const orderNodes = node.querySelector('.orderlines')
+
+            for(let i=0;i < orderNodes.children.length; ++i) {
+                child = orderNodes.children[i]
+                if (child.classList.contains('responsive-price')) {
+                    productName = `${child.innerText}`.trim()
+                } else if(child.tagName === 'DIV' && !productName && /^[\w\s]+$/i.test(child.innerHTML)) {
+                    productName = `${child.innerText}`.trim()
+                } else if (child.tagName === 'SPAN' && productName && !(productPrice && productQuantity)) {
+                    productName = `${productName} ${child.innerText}`.trim()
+                } else if (/price_display/i.test(child.innerHTML) && productName && !(productPrice && productQuantity)) {
+                    const [priceQuantity, priceAndTaxCode] = child.innerText.split('\n')
+                    const [quantity, price] = priceQuantity.split(' x ')
+                    taxCode = priceAndTaxCode.match(/([ABE]{1}$)/i)?.[0]
+                    productQuantity = parseInt(quantity)
+                    productPrice = parseFloat(price.replace(',','')).toFixed(2)
+
+                    aggregates.calculated_sub_total_by_product += productPrice * productQuantity
+                    aggregates.calculated_total_quantity += productQuantity
+                    aggregates.calculated_total_products += 1
+
+                    if (productPrice && !taxCode) aggregates.without_tax_code += 1
+
+                    orders.push({
+                        "quantity": productQuantity,
+                        "price": productPrice,
+                        "name": productName,
+                        "tax_code": taxCode
+                    })
+                    taxCode = ''
+                    productPrice = 0
+                    productQuantity = 0
+                    productName = ''
                 }
-                orders.push(product)
             }
             return orders
         })(),
         "payment_modes": (() => {
-            const payments = {}
-            const paymentNodes = node.querySelectorAll('.paymentlines')??[]
-            for (let i = 0; i < paymentNodes.length; ++i) {
-                const [paymentMethod, amountPaid] = `${paymentNodes[i].innerText??''}`.split('\n')
-                payments[PAYMENT_MAP[paymentMethod]] = extractMoney(amountPaid)
-            }
-            return payments
-        })(),
-        "total_amount": extractMoney(
-            node.querySelector('.pos-receipt-amount')?.innerText
-        )
+            // Preconfigured supported payment types
+            const SUPPORTED_PAYMENTS = (() => JSON.parse(
+                localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY) 
+                || '{"Cash": "P", "Card": "N"}'
+            ))()
+            return Object.keys(SUPPORTED_PAYMENTS).reduce((acc, key) => { 
+                const pattern = `${key}\\s*((([1-9]\\d{0,2}(,\\d{3})*)|0)?\\.\\d{2})`
+                const found = receiptText.match(new RegExp(pattern, 'i'))
+                if (found) {
+                    acc[SUPPORTED_PAYMENTS[key]] = parseFloat(found[1].replace(',','')).toFixed(2)
+                    aggregates.calculated_sub_total_by_payment_modes += acc[SUPPORTED_PAYMENTS[key]]
+                }
+                return acc
+            }, {})
+        })()
     }
-    return receiptObj
+    const validations = {
+        "Tax Code Missing": aggregates.without_tax_code > 0,
+        "Invalid Sub Total": parseInt(aggregates.sub_total) !== parseInt(aggregates.calculated_sub_total_by_product),
+        "Invalid Total Quantity": aggregates.total_quantity !== aggregates.calculated_total_quantity,
+        "Payment Mismatch": parseInt(aggregates.calculated_sub_total_by_payment_modes) < parseInt(aggregates.sub_total),
+        "Invalid Total Products": parseInt(aggregates.total_products) !== parseInt(aggregates.calculated_total_products)
+    }
+    return {
+        receiptData: receiptObj,
+        aggregates,
+        errors: Object.keys(validations).filter(key => validations[key])
+    }
+}
+
+function init(node) {
+    const receipt = parseReceipt(node)
+    console.log(receipt)
+    if (receipt.errors.length > 0) {
+        return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
+    }
+    injectDownloadOption({
+        onPrint: () => {
+            chrome.runtime.sendMessage({ action: "print-receipt", receipt: receipt.receiptData })
+        }
+    })
 }
 
 // Create a MutationObserver
 const observer = new MutationObserver((mutationsList) => {
     for (const mutation of mutationsList) {
         if (mutation.type === 'childList') {
-            // Check for added nodes
             mutation.addedNodes.forEach((node) => {
                 if (node.nodeType === 1 && node.classList.contains(RECEIPT_SCREEN_CLASS)) {
-                    const receipt = parseReceipt(node)
-                    injectDownloadOption({
-                        onPrint: () => {
-                            console.log(receipt)
-                            alert("Receipt object generated")
-                            chrome.runtime.sendMessage({ action: "print-receipt", receipt })
-                        }
-                    })
+                    init(node)
                 }
             });
         }
     }
 });
 
-// Start observing the entire document or a specific container
-observer.observe(document.body,{
-    childList: true, // Observe direct children
-    attributes: true, // Observe attribute changes (like class)
-    subtree: true, // Observe all descendants
-});
+window.addEventListener('load', () => {
+    const container = document.getElementsByClassName(RECEIPT_SCREEN_CLASS)[0]
+    if (container) init(container)
+    // Start observing the entire document or a specific container
+    observer.observe(document.body, {
+        childList: true, // Observe direct children
+        attributes: true, // Observe attribute changes (like class)
+        subtree: true, // Observe all descendants
+    });
+})
