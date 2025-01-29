@@ -2,6 +2,7 @@ const RECEIPT_SCREEN_CLASS = 'pos-receipt'
 const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
 const LOCAL_STORAGE_PAYMENT_FISCALPY = 'com.fiscalpy.odoo.extension.payment_types'
+const LOCAL_STORAGE_CAN_PRINT_ONLOAD = 'com.fiscalpy.odoo.extension.can_print_onload'
 
 chrome.runtime.onMessage.addListener((message) => {
     if (message.origin.action === 'print-receipt') {
@@ -43,6 +44,11 @@ function parseReceipt(node) {
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
     // We need to track the following aggregates for validation purposes..
     const aggregates = {
+        "without_tax_code": 0,
+        "calculated_total_quantity": 0,
+        "calculated_sub_total_by_product": 0,
+        "calculated_sub_total_by_payment_modes": 0,
+        "calculated_total_products": 0,
         "sub_total": parseFloat(
             (receiptText.match(/Sub\s+Total\s+((([1-9]\d{0,2}(,\d{3})*)|0)?\.\d{2})/i)?.[1] ?? '0.0')
             .replace(',','')
@@ -52,12 +58,7 @@ function parseReceipt(node) {
         ),
         "total_products": parseInt(
             receiptText.match(/Total\s+No.\s+of\s+Products\s+(\d+)/i)?.[1] ?? '0'
-        ),
-        "without_tax_code": 0,
-        "calculated_total_quantity": 0,
-        "calculated_sub_total_by_product": 0,
-        "calculated_sub_total_by_payment_modes": 0,
-        "calculated_total_products": 0
+        )
     }
     // Final receipt object that will be printed
     const receiptObj = {
@@ -113,16 +114,13 @@ function parseReceipt(node) {
         })(),
         "payment_modes": (() => {
             // Preconfigured supported payment types
-            const SUPPORTED_PAYMENTS = (() => JSON.parse(
-                localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY) 
-                || '{"Cash": "P", "Card": "N"}'
-            ))()
-            return Object.keys(SUPPORTED_PAYMENTS).reduce((acc, key) => { 
+            const paymentTypes = getPaymentModes()
+            return Object.keys(paymentTypes).reduce((acc, key) => { 
                 const pattern = `${key}\\s*((([1-9]\\d{0,2}(,\\d{3})*)|0)?\\.\\d{2})`
                 const found = receiptText.match(new RegExp(pattern, 'i'))
                 if (found) {
-                    acc[SUPPORTED_PAYMENTS[key]] = parseFloat(found[1].replace(',','')).toFixed(2)
-                    aggregates.calculated_sub_total_by_payment_modes += acc[SUPPORTED_PAYMENTS[key]]
+                    acc[paymentTypes[key]] = parseFloat(found[1].replace(',','')).toFixed(2)
+                    aggregates.calculated_sub_total_by_payment_modes += acc[paymentTypes[key]]
                 }
                 return acc
             }, {})
@@ -142,11 +140,22 @@ function parseReceipt(node) {
     }
 }
 
+function getPaymentModes() {
+    let paymentTypes = localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY)
+    if (!paymentTypes) {
+        localStorage.setItem(LOCAL_STORAGE_PAYMENT_FISCALPY, '{"Cash": "P", "Card": "N"}')
+    }
+    return JSON.parse(paymentTypes)
+}
+
 function init(node) {
     const receipt = parseReceipt(node)
     console.log(receipt)
     if (receipt.errors.length > 0) {
         return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
+    }
+    if (localStorage.getItem(LOCAL_STORAGE_CAN_PRINT_ONLOAD) === 'true') { 
+        chrome.runtime.sendMessage({ action: "print-receipt", receipt: receipt.receiptData })
     }
     injectDownloadOption({
         onPrint: () => {
