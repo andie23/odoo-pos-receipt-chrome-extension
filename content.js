@@ -60,15 +60,12 @@ function parseReceipt(node) {
             receiptText.match(/Total\s+No.\s+of\s+Products\s+(\d+)/i)?.[1] ?? '0'
         )
     }
+    const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
+
     // Final receipt object that will be printed
     const receiptObj = {
-        ...(() => {
-            const text = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
-            return {
-                "user": text.match(/Served\s+by\s+(\w+\s*(?:\w+))/i)?.[1] ?? 'N/A',
-                "order_number": text.match(/order (\d{5}-\d{3}-\d{4})/i)?.[1] ?? 'N/A',
-            }
-        })(),
+        "user": contactSectionText.match(/Served\s+by\s+(\w+\s*(?:\w+))/i)?.[1] ?? 'N/A',
+        "order_number": contactSectionText.match(/order (\d{5}-\d{3}-\d{4})/i)?.[1] ?? 'N/A',
         "products": (() => {
             const orders = []
             let taxCode = ''
@@ -88,22 +85,23 @@ function parseReceipt(node) {
                 } else if (/price_display/i.test(child.innerHTML) && productName && !(productPrice && productQuantity)) {
                     const [priceQuantity, priceAndTaxCode] = child.innerText.split('\n')
                     const [quantity, price] = priceQuantity.split(' x ')
+
                     taxCode = priceAndTaxCode.match(/([ABE]{1}$)/i)?.[0]
                     productQuantity = parseInt(quantity)
                     productPrice = parseFloat(price.replace(',','')).toFixed(2)
-
-                    aggregates.calculated_sub_total_by_product += productPrice * productQuantity
-                    aggregates.calculated_total_quantity += productQuantity
-                    aggregates.calculated_total_products += 1
-
-                    if (productPrice && !taxCode) aggregates.without_tax_code += 1
-
                     orders.push({
                         "quantity": productQuantity,
                         "price": productPrice,
                         "name": productName,
                         "tax_code": taxCode
                     })
+
+                    // Update aggregates after successfully identifying all product attributes
+                    aggregates.calculated_sub_total_by_product += productPrice * productQuantity
+                    aggregates.calculated_total_quantity += productQuantity
+                    aggregates.calculated_total_products += 1
+                    if (productPrice && !taxCode) aggregates.without_tax_code += 1
+                    // Clear for next products to be iterated on
                     taxCode = ''
                     productPrice = 0
                     productQuantity = 0
@@ -151,36 +149,36 @@ function getPaymentModes() {
 function init(node) {
     const receipt = parseReceipt(node)
     console.log(receipt)
+    const sendPrintMessage = () => chrome.runtime.sendMessage({
+        receipt: receipt.receiptData,
+        action: "print-receipt"
+    })
     if (receipt.errors.length > 0) {
         return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
     }
     if (localStorage.getItem(LOCAL_STORAGE_CAN_PRINT_ONLOAD) === 'true') { 
-        chrome.runtime.sendMessage({ action: "print-receipt", receipt: receipt.receiptData })
+        sendPrintMessage()
     }
     injectDownloadOption({
-        onPrint: () => {
-            chrome.runtime.sendMessage({ action: "print-receipt", receipt: receipt.receiptData })
-        }
+        onPrint: () => sendPrintMessage()
     })
 }
-
-// Create a MutationObserver
-const observer = new MutationObserver((mutationsList) => {
-    for (const mutation of mutationsList) {
-        if (mutation.type === 'childList') {
-            mutation.addedNodes.forEach((node) => {
-                if (node.nodeType === 1 && node.classList.contains(RECEIPT_SCREEN_CLASS)) {
-                    init(node)
-                }
-            });
-        }
-    }
-});
 
 window.addEventListener('load', () => {
     const container = document.getElementsByClassName(RECEIPT_SCREEN_CLASS)[0]
     if (container) init(container)
     // Start observing the entire document or a specific container
+    const observer = new MutationObserver((mutationsList) => {
+        for (const mutation of mutationsList) {
+            if (mutation.type === 'childList') {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === 1 && node.classList.contains(RECEIPT_SCREEN_CLASS)) {
+                        init(node)
+                    }
+                });
+            }
+        }
+    });
     observer.observe(document.body, {
         childList: true, // Observe direct children
         attributes: true, // Observe attribute changes (like class)
