@@ -162,7 +162,7 @@ function parseReceipt(node) {
             "Missing products": receiptObj.products.length === 0,
             "Missing total quantity": aggregates.total_quantity === 0,
             "Missing Order Number": !receiptObj.order_number,
-            "Missing sub total": aggregates.sub_total === '0.0' || !aggregates.sub_total || isNaN(aggregates.sub_total) || aggregates.sub_total === 0,
+            "Missing sub total": !aggregates.sub_total || !aggregates.sub_total || isNaN(aggregates.sub_total) || aggregates.sub_total === 0,
             "Tax Code Missing": aggregates.without_tax_code > 0,
             "Invalid Sub Total": parseInt(aggregates.sub_total) !== parseInt(aggregates.calculated_sub_total_by_product),
             "Invalid Total Quantity": aggregates.total_quantity !== aggregates.calculated_total_quantity,
