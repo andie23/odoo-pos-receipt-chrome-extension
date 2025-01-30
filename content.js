@@ -1,8 +1,9 @@
 const RECEIPT_SCREEN_CLASS = 'pos-receipt'
 const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
-const LOCAL_STORAGE_PAYMENT_FISCALPY = 'com.fiscalpy.odoo.extension.payment_types'
-const LOCAL_STORAGE_CAN_PRINT_ONLOAD = 'com.fiscalpy.odoo.extension.can_print_onload'
+const LOCAL_STORAGE_PRINT_COPY = 'printCopy'
+const LOCAL_STORAGE_PAYMENT_FISCALPY = 'paymentTypes'
+const LOCAL_STORAGE_CAN_PRINT_ONLOAD = 'printOnload'
 const LOCAL_STORAGE_PRINTED_ORDER_NUMBERS = 'com.fiscalpy.odoo.extension.printed_order_numbers'
 
 /**
@@ -76,7 +77,8 @@ function extractInt(text, pattern, defaultValue=0, index=1) {
 }
 
 // Parse the receipt screen and extract the necessary data
-function parseReceipt(node) {
+async function parseReceipt(node) {
+    const paymentTypes = await getPaymentModes();
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
     const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
     const receiptDate = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
@@ -97,22 +99,18 @@ function parseReceipt(node) {
     const receiptObj = {
         "user": extractText(contactSectionText, "Served\\s+by\\s+(\\w+\\s*(?:\\w+))", "N/A"),
         "order_number": extractText(contactSectionText, "order (\\d{5}-\\d{3}-\\d{4})", "N/A"),
-        "payment_modes": (() => {
-            // Preconfigured supported payment types
-            const paymentTypes = getPaymentModes()
-            return Object.keys(paymentTypes).reduce((acc, key) => { 
-                const amount = extractMoney(receiptText, `${key}\\s+`)
-                if (amount) {
-                    acc[paymentTypes[key]] = amount
-                    if (aggregates.calculated_sub_total_by_payment_modes === 0) {
-                        aggregates.calculated_sub_total_by_payment_modes = acc[paymentTypes[key]]
-                    } else {
-                        aggregates.calculated_sub_total_by_payment_modes += acc[paymentTypes[key]]
-                    }
+        "payment_modes": Object.keys(paymentTypes).reduce((acc, key) => { 
+            const amount = extractMoney(receiptText, `${key}\\s+`)
+            if (amount) {
+                acc[paymentTypes[key]] = amount
+                if (aggregates.calculated_sub_total_by_payment_modes === 0) {
+                    aggregates.calculated_sub_total_by_payment_modes = acc[paymentTypes[key]]
+                } else {
+                    aggregates.calculated_sub_total_by_payment_modes += acc[paymentTypes[key]]
                 }
-                return acc
-            }, {})
-        })(),
+            }
+            return acc
+        }, {}),
         "products": (() => {
             const orders = []
             let taxCode = ''
@@ -195,19 +193,16 @@ function updateOrderNumber(orderNumber) {
     localStorage.setItem(LOCAL_STORAGE_PRINTED_ORDER_NUMBERS, JSON.stringify(orderNumbers))
 }
 
-function getPaymentModes() {
-    let paymentTypes = localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY)
-    if (!paymentTypes) {
-        paymentTypes = '{"Cash": "P", "Card": "N"}'
-        localStorage.setItem(LOCAL_STORAGE_PAYMENT_FISCALPY, paymentTypes)
-    }
-    return JSON.parse(paymentTypes)
+async function getPaymentModes() {
+    return chrome.storage.local.get([LOCAL_STORAGE_PAYMENT_FISCALPY])?.[LOCAL_STORAGE_PAYMENT_FISCALPY] ?? { "Cash": "P" }
 }
 
 function init(node) {
-    const receipt = parseReceipt(node)
-    console.log(receipt)
-    const sendPrintMessage = () => {
+    const sendPrintMessage = async () => {
+        const receipt = await parseReceipt(node)
+        if (receipt.errors.length > 0) {
+            return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
+        }
         if (receipt.receiptDate && 
             !receipt.isCurrentDate && 
             !confirm('The receipt date is not today. Are you sure you want to print?')) {
@@ -220,12 +215,13 @@ function init(node) {
         }
         chrome.runtime.sendMessage({ receipt: receipt.receiptData, action: "print-receipt" })
     }
-    if (receipt.errors.length > 0) {
-        return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
-    }
-    if (localStorage.getItem(LOCAL_STORAGE_CAN_PRINT_ONLOAD) === 'true') { 
-        sendPrintMessage()
-    }
+
+    chrome.storage.local.get([LOCAL_STORAGE_CAN_PRINT_ONLOAD]).then((data) => { 
+        if (data[LOCAL_STORAGE_CAN_PRINT_ONLOAD]) {
+            sendPrintMessage()
+        }
+    })
+
     injectDownloadOption({
         onPrint: () => sendPrintMessage()
     })

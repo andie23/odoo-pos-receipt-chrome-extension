@@ -3,7 +3,12 @@
     "manifest_version": 3,
     "version": "1.0",
     "description": "Reads Odoo POS Receipts and sends them to fiscal receipt",
-    "permissions": ["activeTab", "scripting", "nativeMessaging"],
+    "permissions": [
+        "activeTab", 
+        "scripting", 
+        "nativeMessaging",
+        "storage"
+    ],
     "host_permissions": ["file:///home/andrew-dev/Documents/*"],
     "background": {
         "service_worker": "background.js"
@@ -20,6 +25,7 @@
         "128": "icons/icon_128x128.png"
     },
     "action": {
+        "default_popup": "popover.html",
         "default_title": "Fiscalpy",
         "default_icon": {
             "16": "icons/icon_16x16.png",
