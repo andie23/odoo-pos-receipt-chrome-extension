@@ -43,6 +43,20 @@ function injectDownloadOption(params) {
     }, 500)
 }
 
+function isCurrentDate(date) {
+    try {
+        const [day, month, year] = date.split('/')
+        const today = new Date()
+        const receiptDate = new Date(`${year.split(' ')[0]}-${month}-${day}`)
+        receiptDate.setHours(0,0,0,0)
+        today.setHours(0,0,0,0)
+        return receiptDate >= today
+    } catch (e) {
+        console.error(e)
+        return false
+    }
+}
+
 // Parse the receipt screen and extract the necessary data
 function parseReceipt(node) {
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
@@ -65,6 +79,8 @@ function parseReceipt(node) {
         )
     }
     const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
+
+    const receiptDate = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
 
     // Final receipt object that will be printed
     const receiptObj = {
@@ -148,6 +164,8 @@ function parseReceipt(node) {
         console.error(e)
     }
     return {
+        receiptDate,
+        isCurrentDate: isCurrentDate(receiptDate),
         receiptData: receiptObj,
         aggregates,
         errors: Object.keys(validations).filter(key => validations[key])
@@ -177,6 +195,11 @@ function init(node) {
     const receipt = parseReceipt(node)
     console.log(receipt)
     const sendPrintMessage = () => {
+        if (receipt.receiptDate && 
+            !receipt.isCurrentDate && 
+            !confirm('The receipt date is not today. Are you sure you want to print?')) {
+            return
+        }
         if (isOrderNumberPrinted(receipt.receiptData.order_number)) {
             if (!confirm(`Order number ${receipt.receiptData.order_number} was already processed. YOU MAY INCUR DOUBLE TAXATION IF YOU PRINT AGAIN...`)) {
                 return
