@@ -1,9 +1,9 @@
 const RECEIPT_SCREEN_CLASS = 'pos-receipt'
 const FISCALPY_PRINT_UI_ID = 'fiscalpy-print-ui'
 const FISCALPY_PRINT_BTN_ID = 'fiscalpy-print-btn'
-const LOCAL_STORAGE_PRINT_COPY = 'printCopy'
 const LOCAL_STORAGE_PAYMENT_FISCALPY = 'paymentTypes'
 const LOCAL_STORAGE_CAN_PRINT_ONLOAD = 'printOnload'
+const LOCAL_STORAGE_PRINT_COPY = 'printCopy'
 const LOCAL_STORAGE_PRINTED_ORDER_NUMBERS = 'com.fiscalpy.odoo.extension.printed_order_numbers'
 
 /**
@@ -79,6 +79,7 @@ function extractInt(text, pattern, defaultValue=0, index=1) {
 // Parse the receipt screen and extract the necessary data
 async function parseReceipt(node) {
     const paymentTypes = await getPaymentModes();
+    const canPrintCopy = (await chrome.storage.local.get(LOCAL_STORAGE_PRINT_COPY))?.[LOCAL_STORAGE_PRINT_COPY] ?? false
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
     const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
     const receiptDate = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
@@ -97,6 +98,7 @@ async function parseReceipt(node) {
 
     // Final receipt object that will be printed
     const receiptObj = {
+        "print_copy": canPrintCopy,
         "user": extractText(contactSectionText, "Served\\s+by\\s+(\\w+\\s*(?:\\w+))", "N/A"),
         "order_number": extractText(contactSectionText, "order (\\d{5}-\\d{3}-\\d{4})", "N/A"),
         "payment_modes": Object.keys(paymentTypes).reduce((acc, key) => { 
@@ -200,6 +202,7 @@ async function getPaymentModes() {
 function init(node) {
     const sendPrintMessage = async () => {
         const receipt = await parseReceipt(node)
+        console.log(receipt)
         if (receipt.errors.length > 0) {
             return alert(`Receipt Extraction Failed: ${receipt.errors.join(', ')}`)
         }
