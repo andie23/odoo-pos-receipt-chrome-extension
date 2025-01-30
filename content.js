@@ -196,7 +196,7 @@ function updateOrderNumber(orderNumber) {
 }
 
 async function getPaymentModes() {
-    return chrome.storage.local.get([LOCAL_STORAGE_PAYMENT_FISCALPY])?.[LOCAL_STORAGE_PAYMENT_FISCALPY] ?? { "Cash": "P" }
+    return (await chrome.storage.local.get([LOCAL_STORAGE_PAYMENT_FISCALPY]))?.[LOCAL_STORAGE_PAYMENT_FISCALPY] ?? { "Cash": "P" }
 }
 
 function init(node) {
