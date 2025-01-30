@@ -133,6 +133,7 @@ function parseReceipt(node) {
         "payment_modes": (() => {
             // Preconfigured supported payment types
             const paymentTypes = getPaymentModes()
+            console.log(paymentTypes)
             return Object.keys(paymentTypes).reduce((acc, key) => { 
                 const pattern = `${key}\\s*((([1-9]\\d{0,2}(,\\d{3})*)|0)?\\.\\d{2})`
                 const found = receiptText.match(new RegExp(pattern, 'i'))
@@ -186,7 +187,8 @@ function updateOrderNumber(orderNumber) {
 function getPaymentModes() {
     let paymentTypes = localStorage.getItem(LOCAL_STORAGE_PAYMENT_FISCALPY)
     if (!paymentTypes) {
-        localStorage.setItem(LOCAL_STORAGE_PAYMENT_FISCALPY, '{"Cash": "P", "Card": "N"}')
+        paymentTypes = '{"Cash": "P", "Card": "N"}'
+        localStorage.setItem(LOCAL_STORAGE_PAYMENT_FISCALPY, paymentTypes)
     }
     return JSON.parse(paymentTypes)
 }
