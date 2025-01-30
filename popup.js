@@ -35,7 +35,7 @@ addPaymentButton.addEventListener("click", () => {
     const key = paymentKeySelect.value;
     const name = paymentNameInput.value.trim();
 
-    if (!name) return;
+    if (!name) return alert("Please enter payment type name");
 
     chrome.storage.local.get([LOCAL_STORAGE_PAYMENT_FISCALPY], (data) => {
         if (data[LOCAL_STORAGE_PAYMENT_FISCALPY] && data[LOCAL_STORAGE_PAYMENT_FISCALPY][key]) {
