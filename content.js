@@ -36,9 +36,7 @@ function injectDownloadOption(params) {
     setTimeout(() => {
         document.getElementById(FISCALPY_PRINT_BTN_ID).removeAttribute('disabled');
         document.getElementById(FISCALPY_PRINT_BTN_ID).addEventListener('click', () => {
-            if (typeof params.onPrint === 'function') {
-                params.onPrint()
-            }
+            if (typeof params.onPrint === 'function') params.onPrint()
         });
     }, 500)
 }
@@ -57,35 +55,64 @@ function isCurrentDate(date) {
     }
 }
 
+function toFloat(val) {
+    return parseFloat(val.replace(',','')).toFixed(2)
+}
+
+function extractText(text, pattern, defaultValue='', index=1) {
+    return `${text??''}`.match(new RegExp(pattern, 'i'))?.[index] ?? defaultValue
+}
+
+function extractMoney(text, extraPattern='') {
+    const moneyPattern = '(([1-9]\\d{0,2}(,\\d{3})*)|0)?\\.\\d{2}'
+    const val = extractText(text, `${extraPattern}(${moneyPattern})`)
+    return new RegExp(moneyPattern, 'i').test(`${val}`) ? toFloat(val) : ''
+}
+
+
+function extractInt(text, pattern, defaultValue=0, index=1) { 
+    const val = extractText(text, pattern, defaultValue, index)
+    return /^\d+$/i.test(`${val}`) ?  parseInt(`${val}`) : defaultValue
+}
+
 // Parse the receipt screen and extract the necessary data
 function parseReceipt(node) {
     const receiptText = (node?.innerText ?? '').replace(/\s+/g, ' ')
+    const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
+    const receiptDate = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
+
     // We need to track the following aggregates for validation purposes..
     const aggregates = {
         "without_tax_code": 0,
         "calculated_total_quantity": 0,
+        "calculated_total_products": 0,
         "calculated_sub_total_by_product": 0,
         "calculated_sub_total_by_payment_modes": 0,
-        "calculated_total_products": 0,
-        "sub_total": parseFloat(
-            (receiptText.match(/Sub\s+Total\s+((([1-9]\d{0,2}(,\d{3})*)|0)?\.\d{2})/i)?.[1] ?? '0.0')
-            .replace(',','')
-        ).toFixed(2),
-        "total_quantity": parseInt(
-            receiptText.match(/Total\s+Product\s+Qty\s+(\d+)/i)?.[1] ?? '0'
-        ),
-        "total_products": parseInt(
-            receiptText.match(/Total\s+No.\s+of\s+Products\s+(\d+)/i)?.[1] ?? '0'
-        )
+        "sub_total": extractMoney(receiptText, 'Sub\\s+Total\\s+'),
+        "total_quantity": extractInt(receiptText, 'Total\\s+Product\\s+Qty\\s+(\\d+)'),
+        "total_products": extractInt(receiptText, 'Total\\s+No.\\s+of\\s+Products\\s+(\\d+)')
     }
-    const contactSectionText = node.querySelector('.pos-receipt-contact')?.innerText ?? ''
-
-    const receiptDate = node.querySelector('.pos-receipt-order-data')?.innerText ?? ''
 
     // Final receipt object that will be printed
     const receiptObj = {
-        "user": contactSectionText.match(/Served\s+by\s+(\w+\s*(?:\w+))/i)?.[1] ?? 'N/A',
-        "order_number": contactSectionText.match(/order (\d{5}-\d{3}-\d{4})/i)?.[1] ?? 'N/A',
+        "user": extractText(contactSectionText, "Served\\s+by\\s+(\\w+\\s*(?:\\w+))", "N/A"),
+        "order_number": extractText(contactSectionText, "order (\\d{5}-\\d{3}-\\d{4})", "N/A"),
+        "payment_modes": (() => {
+            // Preconfigured supported payment types
+            const paymentTypes = getPaymentModes()
+            return Object.keys(paymentTypes).reduce((acc, key) => { 
+                const amount = extractMoney(receiptText, `${key}\\s+`)
+                if (amount) {
+                    acc[paymentTypes[key]] = amount
+                    if (aggregates.calculated_sub_total_by_payment_modes === 0) {
+                        aggregates.calculated_sub_total_by_payment_modes = acc[paymentTypes[key]]
+                    } else {
+                        aggregates.calculated_sub_total_by_payment_modes += acc[paymentTypes[key]]
+                    }
+                }
+                return acc
+            }, {})
+        })(),
         "products": (() => {
             const orders = []
             let taxCode = ''
@@ -105,17 +132,15 @@ function parseReceipt(node) {
                 } else if (/price_display/i.test(child.innerHTML) && productName && !(productPrice && productQuantity)) {
                     const [priceQuantity, priceAndTaxCode] = child.innerText.split('\n')
                     const [quantity, price] = priceQuantity.split(' x ')
-
-                    taxCode = priceAndTaxCode.match(/([ABE]{1}$)/i)?.[0]
+                    taxCode = extractText(priceAndTaxCode, '([ABE]{1})$', '', 0)
                     productQuantity = parseInt(quantity)
-                    productPrice = parseFloat(price.replace(',','')).toFixed(2)
+                    productPrice = toFloat(price)
                     orders.push({
                         "quantity": productQuantity,
                         "price": productPrice,
                         "name": productName,
                         "tax_code": taxCode
                     })
-
                     // Update aggregates after successfully identifying all product attributes
                     aggregates.calculated_sub_total_by_product += productPrice * productQuantity
                     aggregates.calculated_total_quantity += productQuantity
@@ -129,20 +154,6 @@ function parseReceipt(node) {
                 }
             }
             return orders
-        })(),
-        "payment_modes": (() => {
-            // Preconfigured supported payment types
-            const paymentTypes = getPaymentModes()
-            console.log(paymentTypes)
-            return Object.keys(paymentTypes).reduce((acc, key) => { 
-                const pattern = `${key}\\s*((([1-9]\\d{0,2}(,\\d{3})*)|0)?\\.\\d{2})`
-                const found = receiptText.match(new RegExp(pattern, 'i'))
-                if (found) {
-                    acc[paymentTypes[key]] = parseFloat(found[1].replace(',','')).toFixed(2)
-                    aggregates.calculated_sub_total_by_payment_modes += acc[paymentTypes[key]]
-                }
-                return acc
-            }, {})
         })()
     }
     let validations = {}
@@ -165,10 +176,10 @@ function parseReceipt(node) {
         console.error(e)
     }
     return {
-        receiptDate,
-        isCurrentDate: isCurrentDate(receiptDate),
-        receiptData: receiptObj,
         aggregates,
+        receiptDate,
+        receiptData: receiptObj,
+        isCurrentDate: isCurrentDate(receiptDate),
         errors: Object.keys(validations).filter(key => validations[key])
     }
 }
