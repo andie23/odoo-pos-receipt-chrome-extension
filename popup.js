@@ -38,12 +38,12 @@ addPaymentButton.addEventListener("click", () => {
     if (!name) return alert("Please enter payment type name");
 
     chrome.storage.local.get([LOCAL_STORAGE_PAYMENT_FISCALPY], (data) => {
-        if (data[LOCAL_STORAGE_PAYMENT_FISCALPY] && data[LOCAL_STORAGE_PAYMENT_FISCALPY][key]) {
+        if (data?.[LOCAL_STORAGE_PAYMENT_FISCALPY]?.[name]) {
             return alert("Key already exists");
         }
         chrome.storage.local.set({ 
             [LOCAL_STORAGE_PAYMENT_FISCALPY]: {
-                ...data[LOCAL_STORAGE_PAYMENT_FISCALPY], [key]: name 
+                ...data[LOCAL_STORAGE_PAYMENT_FISCALPY], [name]: key 
             } 
         }).then(() => {
             addPaymentToList(key, name);
